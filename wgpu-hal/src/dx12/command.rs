@@ -110,17 +110,25 @@ impl super::CommandEncoder {
 
             let tex_mip_level_count = barrier.texture.mip_level_count;
             let tex_array_layer_count = barrier.texture.array_layer_count();
+            let plane_slice_override = barrier.texture.plane_slice_override();
 
-            if barrier.range.is_full_resource(
-                barrier.texture.format,
-                tex_mip_level_count,
-                tex_array_layer_count,
-            ) {
+            // A texture wrapping one plane of a multi-plane resource covers only
+            // part of it, so the whole-resource shortcut would also transition
+            // planes owned by other wrappers, whose tracked states may differ.
+            if plane_slice_override.is_none()
+                && barrier.range.is_full_resource(
+                    barrier.texture.format,
+                    tex_mip_level_count,
+                    tex_array_layer_count,
+                )
+            {
                 // Only one barrier if it affects the whole image.
                 self.temp.barriers.push(raw);
             } else {
                 // Selected texture aspect is relevant if the texture format has both depth _and_ stencil aspects.
-                let planes = if barrier.texture.format.is_combined_depth_stencil_format() {
+                let planes = if let Some(plane) = plane_slice_override {
+                    plane..plane + 1
+                } else if barrier.texture.format.is_combined_depth_stencil_format() {
                     match barrier.range.aspect {
                         wgt::TextureAspect::All => 0..2,
                         wgt::TextureAspect::DepthOnly => 0..1,

@@ -960,10 +960,10 @@ pub struct Texture {
     mip_level_count: u32,
     sample_count: u32,
     allocation: suballocation::Allocation,
-    /// Pins `PlaneSlice` for every view and copy derived from this texture,
-    /// overriding the default aspect-based derivation. Used by cross-API
-    /// importers wrapping one plane of a multi-plane DXGI resource as a
-    /// single-plane wgpu texture.
+    /// Pins `PlaneSlice` for every view, copy and resource-state barrier
+    /// derived from this texture, overriding the default aspect-based
+    /// derivation. Used by cross-API importers wrapping one plane of a
+    /// multi-plane DXGI resource as a single-plane wgpu texture.
     plane_slice_override: Option<u32>,
 
     // The `_drop_guard` field must be the last field of this struct so it is
@@ -977,31 +977,30 @@ impl Texture {
         &self.resource
     }
 
-    /// Pin the D3D12 plane slice for every view and copy derived from
-    /// this texture. Pass `0` for the luma plane, `1` for chroma. The
-    /// declared `TextureFormat` must be single-plane (e.g. `R8Unorm`,
-    /// `Rg8Unorm`) and match the plane's texel layout.
+    /// Pin the D3D12 plane slice for every view, copy and resource-state
+    /// barrier derived from this texture. Pass `0` for the luma plane, `1`
+    /// for chroma. The declared `TextureFormat` must be single-plane (e.g.
+    /// `R8Unorm`, `Rg8Unorm`) and match the plane's texel layout.
     ///
     /// # Safety / aliasing
     ///
     /// The intended use is to wrap one plane of a multi-plane DXGI
     /// resource (e.g. NV12) as a single-plane wgpu texture, typically
     /// by calling [`Device::texture_from_raw`](Device::texture_from_raw)
-    /// twice with two clones of the same `ID3D12Resource` and a
-    /// different `plane_slice` on each. wgpu's state tracker treats
-    /// these wrappers as independent textures: per-subresource state,
-    /// hazard tracking, and resource-state barriers all assume
-    /// non-aliased ownership and have no way to know the two wrappers
-    /// alias the same underlying resource.
+    /// once per plane with clones of the same `ID3D12Resource` and a
+    /// different `plane_slice` on each. Because barriers are scoped to the
+    /// pinned plane's subresources, each wrapper owns its plane's state
+    /// and the wrappers can be used in different states, in the same
+    /// submission, independently of each other.
     ///
-    /// The caller is responsible for ensuring that the underlying
-    /// resource is not concurrently used by another wgpu texture
-    /// wrapping a different plane in a way that would race or
-    /// invalidate state tracking — in particular, do not submit work
-    /// touching both wrappers in the same submission unless every
-    /// access goes through `COPY_SRC` / `COPY_DST` on the wrapper that
-    /// owns that plane's subresource, and do not destroy the wrappers
-    /// concurrently with in-flight work that uses either of them.
+    /// The caller must ensure that:
+    /// - no plane is wrapped by more than one live texture, since wgpu
+    ///   tracks each wrapper's state separately;
+    /// - the wrapper's mip level and array layer counts are those of the
+    ///   underlying resource, which the subresource indices are computed
+    ///   from;
+    /// - the wrappers are not destroyed while in-flight work uses either of
+    ///   them.
     pub fn with_plane_slice(mut self, plane_slice: u32) -> Self {
         debug_assert!(
             !self.format.is_multi_planar_format(),
